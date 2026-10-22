@@ -1,0 +1,25 @@
+# MySQL artifacts
+*.sql.err
+*.out
+
+# Backup output - never commit database dumps
+backups/
+*.dump
+*.sql.gz
+*.xbstream
+*.qp.xbcrypt
+
+# Editor and OS artifacts
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Credentials and environment-specific files - never commit these
+*.pem
+*.key
+*.pfx
+*.cnf
+.my.cnf
+my.cnf
