@@ -4,8 +4,12 @@ Conventions used by every script in this repository.
 
 ## SQL scripts
 
-- Read-only. The scripts in this repo query `information_schema`,
-  `performance_schema`, and status variables. Nothing here writes.
+- Read-only against the database. The SQL scripts query
+  `information_schema`, `performance_schema`, and status variables.
+  Nothing here writes to a database. The Bash backup script is the one
+  exception to "nothing writes" in the narrowest sense: it writes a dump
+  file to local disk and nothing else; it never issues a write against
+  MySQL itself.
 - A header comment states the purpose, the exact invocation, thresholds,
   the MySQL version tested against, and the permissions required.
 - Tunables are session variables with defaults set through `IFNULL` at the
