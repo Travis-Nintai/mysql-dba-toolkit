@@ -1,7 +1,8 @@
 # MySQL DBA Toolkit
 
-Operational scripts for MySQL 8 administration: an instance health check
-and a replication status check, built and tested in a local lab.
+Operational scripts for MySQL 8 administration: an instance health check,
+a replication status check, and a mysqldump backup script with a binary
+log point-in-time recovery lab, built and tested in a local lab.
 
 An honest note on scope: this repository is a portfolio lab and reference
 implementation. The scripts are real and were executed against a live MySQL
@@ -20,8 +21,9 @@ not translated syntax from another platform.
 
 ```
 mysql-dba-toolkit/
+├── bash/   -- mysqldump backup script
 ├── sql/    -- MySQL diagnostic scripts (health check, replication status)
-└── docs/   -- script conventions
+└── docs/   -- script conventions, backup and recovery lab
 ```
 
 ## Scripts
@@ -30,6 +32,7 @@ mysql-dba-toolkit/
 |---|---|
 | `sql/db_health_check.sql` | Instance overview: version and uptime, connection utilization vs `max_connections` with a warning threshold, aborted connection counts, database and table sizes, InnoDB buffer pool counters, long-running queries from `performance_schema.processlist` |
 | `sql/replication_status.sql` | Replication state from `performance_schema` replication tables: channel connection and applier state with error text, plus a plain-language summary that reports NOT CONFIGURED on a standalone instance instead of an empty result |
+| `bash/backup_database.sh` | Logical backup of one database with `mysqldump`: consistent InnoDB snapshot, read-back verification, and the binary log file and position the dump is consistent with, for point-in-time recovery (see `docs/backup-recovery-lab.md`) |
 
 Health check:
 
@@ -48,6 +51,12 @@ Replication status:
 
 ```
 mysql -h db.example.local -u dba -p < sql/replication_status.sql
+```
+
+Backup (see `docs/backup-recovery-lab.md` for the full walkthrough):
+
+```
+bash/backup_database.sh -d <database> -o ./backups
 ```
 
 ## Assumptions
@@ -76,6 +85,18 @@ Executed against MySQL 8.0.46 on Ubuntu 24.04 in a local lab:
   this lab; they are logic-reviewed against the documented
   performance_schema replication tables, and the script header says the
   same.
+- `backup_database.sh` and the PITR lab in `docs/backup-recovery-lab.md`
+  were executed end to end on the same instance: a 2,000 row lab table
+  backed up clean (exit 0) with its binary log position recorded, then
+  50 rows inserted, one row updated, and one row deleted after the
+  backup. After the table was dropped, restoring the dump alone returned
+  the 2,000 row baseline, and replaying the binary log from the dump's
+  position to the pre-drop position restored the exact pre-disaster
+  state (2,049 rows, matching sums, updated and deleted rows correct).
+  Exit codes 1 (usage), 2 (unreachable server), and 3 (failed
+  verification) were each verified. One real bug was found by testing:
+  mysqldump 8.0.46 writes the position comment in the older
+  `CHANGE MASTER TO` form, so the script now accepts either wording.
 
 ## Safety notes
 
@@ -91,7 +112,9 @@ MySQL-native operational checks: connection pressure against
 `max_connections`, InnoDB buffer pool counters read as logical vs physical
 reads, long-running query detection from `performance_schema.processlist`,
 and replication state reported from the performance_schema replication
-tables with the standalone case handled explicitly.
+tables with the standalone case handled explicitly, plus a verified
+logical backup workflow and a binary log point-in-time recovery
+procedure that was actually run, not just described.
 
 ## Background
 
