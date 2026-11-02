@@ -1,7 +1,8 @@
 # MySQL DBA Toolkit
 
 Operational scripts for MySQL 8 administration: an instance health check,
-a replication status check, and a mysqldump backup script with a binary
+a replication status check, a slow query analysis from statement
+digests, and a mysqldump backup script with a binary
 log point-in-time recovery lab, built and tested in a local lab.
 
 An honest note on scope: this repository is a portfolio lab and reference
@@ -22,8 +23,8 @@ not translated syntax from another platform.
 ```
 mysql-dba-toolkit/
 ├── bash/   -- mysqldump backup script
-├── sql/    -- MySQL diagnostic scripts (health check, replication status)
-└── docs/   -- script conventions, backup and recovery lab
+├── sql/    -- MySQL diagnostic scripts (health check, replication status, slow query analysis)
+└── docs/   -- script conventions, backup and recovery lab, slow query analysis
 ```
 
 ## Scripts
@@ -32,6 +33,7 @@ mysql-dba-toolkit/
 |---|---|
 | `sql/db_health_check.sql` | Instance overview: version and uptime, connection utilization vs `max_connections` with a warning threshold, aborted connection counts, database and table sizes, InnoDB buffer pool counters, long-running queries from `performance_schema.processlist` |
 | `sql/replication_status.sql` | Replication state from `performance_schema` replication tables: channel connection and applier state with error text, plus a plain-language summary that reports NOT CONFIGURED on a standalone instance instead of an empty result |
+| `sql/slow_query_analysis.sql` | Slow query analysis from `performance_schema` statement digests: top queries by total latency, queries that examine far more rows than they return with no-index counts, and current slow query log configuration (see `docs/slow-query-analysis.md`) |
 | `bash/backup_database.sh` | Logical backup of one database with `mysqldump`: consistent InnoDB snapshot, read-back verification, and the binary log file and position the dump is consistent with, for point-in-time recovery (see `docs/backup-recovery-lab.md`) |
 
 Health check:
@@ -51,6 +53,20 @@ Replication status:
 
 ```
 mysql -h db.example.local -u dba -p < sql/replication_status.sql
+```
+
+Slow query analysis (see `docs/slow-query-analysis.md` for the lab run
+and how to read the output):
+
+```
+mysql -h db.example.local -u dba -p < sql/slow_query_analysis.sql
+```
+
+Tune thresholds for one run by setting the session variables first:
+
+```
+mysql -u dba -p -e "SET @min_avg_ms = 5; SET @min_examined_ratio = 500; \
+  SOURCE sql/slow_query_analysis.sql;"
 ```
 
 Backup (see `docs/backup-recovery-lab.md` for the full walkthrough):
@@ -85,6 +101,19 @@ Executed against MySQL 8.0.46 on Ubuntu 24.04 in a local lab:
   this lab; they are logic-reviewed against the documented
   performance_schema replication tables, and the script header says the
   same.
+- `slow_query_analysis.sql` ran clean (exit 0) against a 5,000 row lab
+  table with three statements run 20 times each. The whole-table
+  aggregation topped the latency list (118.8 ms total, 5.942 ms
+  average, 100,000 rows examined, 80 sent, ratio 1250.0); the
+  unindexed filter showed the missing-index shape (ratio 250.0, no
+  index used on every execution); the primary key lookup showed a
+  ratio of 1.0 and correctly appeared in neither flagged list.
+  Threshold overrides were verified (strict thresholds return headers
+  only), as was the configuration section reflecting a real slow log
+  setting change. Testing caught a real bug before commit: average
+  and maximum latency were divided by 1,000,000 instead of
+  1,000,000,000, inflating them 1000x; all timer columns now share
+  one divisor.
 - `backup_database.sh` and the PITR lab in `docs/backup-recovery-lab.md`
   were executed end to end on the same instance: a 2,000 row lab table
   backed up clean (exit 0) with its binary log position recorded, then
@@ -114,7 +143,10 @@ reads, long-running query detection from `performance_schema.processlist`,
 and replication state reported from the performance_schema replication
 tables with the standalone case handled explicitly, plus a verified
 logical backup workflow and a binary log point-in-time recovery
-procedure that was actually run, not just described.
+procedure that was actually run, not just described, and slow query
+analysis from statement digests that ranks queries by total latency
+and flags the high examined-per-sent, no-index shape for EXPLAIN
+follow-up.
 
 ## Background
 
