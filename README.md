@@ -24,7 +24,7 @@ not translated syntax from another platform.
 mysql-dba-toolkit/
 ├── bash/   -- mysqldump backup script
 ├── sql/    -- MySQL diagnostic scripts (health check, replication status, slow query analysis)
-└── docs/   -- script conventions, backup and recovery lab, slow query analysis
+└── docs/   -- script conventions, backup and recovery lab, slow query analysis, replication setup
 ```
 
 ## Scripts
@@ -32,7 +32,7 @@ mysql-dba-toolkit/
 | Script | What it does |
 |---|---|
 | `sql/db_health_check.sql` | Instance overview: version and uptime, connection utilization vs `max_connections` with a warning threshold, aborted connection counts, database and table sizes, InnoDB buffer pool counters, long-running queries from `performance_schema.processlist` |
-| `sql/replication_status.sql` | Replication state from `performance_schema` replication tables: channel connection and applier state with error text, plus a plain-language summary that reports NOT CONFIGURED on a standalone instance instead of an empty result |
+| `sql/replication_status.sql` | Replication state from `performance_schema` replication tables: channel connection and applier state with error text, plus a plain-language summary that reports NOT CONFIGURED on a standalone instance, RECEIVING when receiver and applier are both running, and ATTENTION when either side stops (see `docs/replication-setup.md`) |
 | `sql/slow_query_analysis.sql` | Slow query analysis from `performance_schema` statement digests: top queries by total latency, queries that examine far more rows than they return with no-index counts, and current slow query log configuration (see `docs/slow-query-analysis.md`) |
 | `bash/backup_database.sh` | Logical backup of one database with `mysqldump`: consistent InnoDB snapshot, read-back verification, and the binary log file and position the dump is consistent with, for point-in-time recovery (see `docs/backup-recovery-lab.md`) |
 
@@ -49,7 +49,8 @@ mysql -u dba -p -e "SET @warn_conn_pct = 90; SET @long_query_sec = 120; \
   SOURCE sql/db_health_check.sql;"
 ```
 
-Replication status:
+Replication status (see `docs/replication-setup.md` for the source and
+replica pair lab, including how to read the output on each side):
 
 ```
 mysql -h db.example.local -u dba -p < sql/replication_status.sql
@@ -95,12 +96,22 @@ Executed against MySQL 8.0.46 on Ubuntu 24.04 in a local lab:
   fixed during testing: uptime is a status variable, not a system
   variable, and the script now reads it from
   `performance_schema.global_status`.
-- `replication_status.sql` ran clean (exit 0) against the same instance,
-  which is standalone, and correctly reported NOT CONFIGURED. The
-  replica-side query paths have not been run against a live replica in
-  this lab; they are logic-reviewed against the documented
-  performance_schema replication tables, and the script header says the
-  same.
+- `replication_status.sql` ran clean (exit 0) against a local
+  source/replica pair built for this session (source port 3306,
+  replica port 3307, GTID auto-positioning), as documented in
+  `docs/replication-setup.md`. On the source it reported NOT
+  CONFIGURED for its own channels and listed the attached replica
+  in the Binlog Dump GTID processlist section. On the replica it
+  reported RECEIVING with both receiver and applier ON and zero lag,
+  and the replica matched the source exactly at 2,150 rows after a
+  100 row write followed by a 50 row write with the applier stopped.
+  With the applier stopped, the replica stayed 50 rows behind while
+  the receiver stayed ON, and the original summary still read
+  RECEIVING: testing caught that the summary checked only the
+  receiver. The summary now checks both receiver and applier, and
+  the fixed script was re-run in all three states (running:
+  RECEIVING, applier stopped: ATTENTION, fully stopped: ATTENTION)
+  with the source run unchanged.
 - `slow_query_analysis.sql` ran clean (exit 0) against a 5,000 row lab
   table with three statements run 20 times each. The whole-table
   aggregation topped the latency list (118.8 ms total, 5.942 ms
@@ -141,7 +152,9 @@ MySQL-native operational checks: connection pressure against
 `max_connections`, InnoDB buffer pool counters read as logical vs physical
 reads, long-running query detection from `performance_schema.processlist`,
 and replication state reported from the performance_schema replication
-tables with the standalone case handled explicitly, plus a verified
+tables with the standalone case handled explicitly and the summary
+checking both the receiver and the applier, verified against a real
+local source/replica pair, plus a verified
 logical backup workflow and a binary log point-in-time recovery
 procedure that was actually run, not just described, and slow query
 analysis from statement digests that ranks queries by total latency
