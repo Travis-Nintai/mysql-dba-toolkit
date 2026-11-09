@@ -21,12 +21,17 @@
 --   Run it alongside this script when you need the full field list,
 --   including last error text.
 --
--- Tested on MySQL 8.0 (Ubuntu 24.04 package): executed against a local
--- standalone instance that is not a replica; the script reported
--- NOT CONFIGURED for every channel, which is the correct result for that
--- topology. The replica-path queries were logic-reviewed against the
--- documented performance_schema replication tables; they have not been
--- run against a live replica in this lab yet, and this header says so.
+-- Tested on MySQL 8.0.46 (Ubuntu 24.04 package): executed against a local
+-- source/replica pair on one host (source port 3306, replica port 3307,
+-- GTID auto-position). On the source the script reported NOT CONFIGURED
+-- for its own channels and listed the attached replica in the Binlog
+-- Dump GTID processlist section. On the replica it reported RECEIVING
+-- with both receiver and applier ON and zero lag. With the applier
+-- stopped it reported the applier OFF while the receiver stayed ON, and
+-- with replication fully stopped it reported ATTENTION in both cases
+-- after the summary fix below. Testing caught that the original summary
+-- checked only the receiver, so a stopped applier was reported as
+-- RECEIVING while the replica fell behind; fixed 2026-11-08.
 --
 -- Requires:
 --   SELECT on performance_schema. A monitoring account is fine.
@@ -71,14 +76,24 @@ FROM performance_schema.replication_applier_status_by_coordinator;
 
 SELECT '--- Plain-language summary ---' AS '';
 
+-- The summary checks both sides of replication: the receiver (connection
+-- status) and the applier (coordinator status). Either side stopped means
+-- the replica is not keeping up, even if the other side still reports ON.
+-- A stopped applier with a running receiver is the usual shape of a
+-- replica quietly falling behind, so it must not read as RECEIVING.
 SELECT CASE
-         WHEN COUNT(*) = 0
+         WHEN (SELECT COUNT(*)
+               FROM performance_schema.replication_connection_status) = 0
            THEN 'NOT CONFIGURED: this instance has no replication source. It is standalone, or it is a source with no replica channels of its own.'
-         WHEN SUM(service_state = 'ON') = COUNT(*)
-           THEN 'RECEIVING: all configured channels are connected.'
-         ELSE 'ATTENTION: at least one channel is not in service_state ON. Check last_error_message above and SHOW REPLICA STATUS.'
-       END AS summary
-FROM performance_schema.replication_connection_status;
+         WHEN (SELECT COUNT(*)
+               FROM performance_schema.replication_connection_status
+               WHERE service_state <> 'ON') > 0
+           OR (SELECT COUNT(*)
+               FROM performance_schema.replication_applier_status_by_coordinator
+               WHERE service_state <> 'ON') > 0
+           THEN 'ATTENTION: a replication channel receiver or applier is not in service_state ON. The replica may be falling behind even though one side still reports ON. Check last_error_message above and SHOW REPLICA STATUS.'
+         ELSE 'RECEIVING: all configured channel receivers and appliers are connected.'
+       END AS summary;
 
 -- ---------------------------------------------------------------------------
 -- Source-side view: if other instances replicate from this one, they show
