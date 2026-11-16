@@ -1,9 +1,10 @@
 # MySQL DBA Toolkit
 
 Operational scripts for MySQL 8 administration: an instance health check,
-a replication status check, a slow query analysis from statement
-digests, and a mysqldump backup script with a binary
-log point-in-time recovery lab, built and tested in a local lab.
+a replication status check, an InnoDB storage engine status check, a
+slow query analysis from statement digests, and a mysqldump backup
+script with a binary log point-in-time recovery lab, built and tested
+in a local lab.
 
 An honest note on scope: this repository is a portfolio lab and reference
 implementation. The scripts are real and were executed against a live MySQL
@@ -23,8 +24,8 @@ not translated syntax from another platform.
 ```
 mysql-dba-toolkit/
 ├── bash/   -- mysqldump backup script
-├── sql/    -- MySQL diagnostic scripts (health check, replication status, slow query analysis)
-└── docs/   -- script conventions, backup and recovery lab, slow query analysis, replication setup
+├── sql/    -- MySQL diagnostic scripts (health check, replication status, InnoDB status, slow query analysis)
+└── docs/   -- script conventions, backup and recovery lab, slow query analysis, replication setup, InnoDB status
 ```
 
 ## Scripts
@@ -33,6 +34,7 @@ mysql-dba-toolkit/
 |---|---|
 | `sql/db_health_check.sql` | Instance overview: version and uptime, connection utilization vs `max_connections` with a warning threshold, aborted connection counts, database and table sizes, InnoDB buffer pool counters, long-running queries from `performance_schema.processlist` |
 | `sql/replication_status.sql` | Replication state from `performance_schema` replication tables: channel connection and applier state with error text, plus a plain-language summary that reports NOT CONFIGURED on a standalone instance, RECEIVING when receiver and applier are both running, and ATTENTION when either side stops (see `docs/replication-setup.md`) |
+| `sql/innodb_status.sql` | InnoDB storage engine status: buffer pool hit ratio and page mix with dirty page share, redo log pressure and log waits, transaction history list length, long-running transactions, current lock waits with waiting and blocking transaction IDs, row operation counters, change buffer activity, and adaptive hash index use, with the full `SHOW ENGINE INNODB STATUS` output as an appendix for checkpoint age and deadlock detail (see `docs/innodb-status.md`) |
 | `sql/slow_query_analysis.sql` | Slow query analysis from `performance_schema` statement digests: top queries by total latency, queries that examine far more rows than they return with no-index counts, and current slow query log configuration (see `docs/slow-query-analysis.md`) |
 | `bash/backup_database.sh` | Logical backup of one database with `mysqldump`: consistent InnoDB snapshot, read-back verification, and the binary log file and position the dump is consistent with, for point-in-time recovery (see `docs/backup-recovery-lab.md`) |
 
@@ -54,6 +56,20 @@ replica pair lab, including how to read the output on each side):
 
 ```
 mysql -h db.example.local -u dba -p < sql/replication_status.sql
+```
+
+InnoDB status (see `docs/innodb-status.md` for the lab run and how to
+read the output):
+
+```
+mysql -h db.example.local -u dba -p < sql/innodb_status.sql
+```
+
+Tune thresholds for one run by setting the session variables first:
+
+```
+mysql -u dba -p -e "SET @warn_buffer_hit_pct = 99.5; SET @warn_dirty_pct = 50; \
+  SET @long_trx_sec = 30; SOURCE sql/innodb_status.sql;"
 ```
 
 Slow query analysis (see `docs/slow-query-analysis.md` for the lab run
@@ -112,6 +128,28 @@ Executed against MySQL 8.0.46 on Ubuntu 24.04 in a local lab:
   the fixed script was re-run in all three states (running:
   RECEIVING, applier stopped: ATTENTION, fully stopped: ATTENTION)
   with the source run unchanged.
+- `innodb_status.sql` ran clean (exit 0) against a 5,000 row lab table
+  on the same instance, as documented in `docs/innodb-status.md`. The
+  buffer pool hit ratio read 98.49 percent on the cold cache after a
+  restart (correctly WARNING at the default 99 percent threshold) and
+  99.08 percent after warm-up. A 5,000 row update left 33 dirty pages
+  (3.2 percent), flagged WARNING when the dirty threshold was
+  overridden to 1 percent. A deliberate holder and waiter pair on one
+  row produced exactly one lock wait, reported with the waiting
+  transaction, the locked table and index, the lock mode, and the
+  blocking transaction. A long-running transaction appeared in its
+  section with `@long_trx_sec = 1`. Threshold overrides were verified
+  for the hit ratio, dirty share, and history list. Testing caught
+  four real schema errors before commit: the buffer pool stats table
+  has no `NUMBER_PAGES_EVICTED` column, the lock waits table carries
+  no object columns (they come from a join to `data_locks`), the
+  `Innodb_ibuf_*` and `Innodb_adaptive_hash_*` status variables do
+  not exist on MySQL 8.0 (those counters now come from
+  `INNODB_METRICS`), and `Innodb_deadlocks` is not exposed as a
+  status variable on MySQL 8.0 (deadlock detail is appendix-only).
+  The redo log showed 0 log waits, the change buffer 0 merges with
+  size 1, and the adaptive hash index 20,087 hash searches against
+  4,518 B-tree searches (18.4 percent B-tree share).
 - `slow_query_analysis.sql` ran clean (exit 0) against a 5,000 row lab
   table with three statements run 20 times each. The whole-table
   aggregation topped the latency list (118.8 ms total, 5.942 ms
@@ -151,7 +189,10 @@ Executed against MySQL 8.0.46 on Ubuntu 24.04 in a local lab:
 MySQL-native operational checks: connection pressure against
 `max_connections`, InnoDB buffer pool counters read as logical vs physical
 reads, long-running query detection from `performance_schema.processlist`,
-and replication state reported from the performance_schema replication
+InnoDB engine status read as buffer pool hit ratio and dirty page share,
+redo log waits, history list length, lock waits with waiting and blocking
+transactions, and change buffer and adaptive hash index counters from
+`INNODB_METRICS`, and replication state reported from the performance_schema replication
 tables with the standalone case handled explicitly and the summary
 checking both the receiver and the applier, verified against a real
 local source/replica pair, plus a verified
